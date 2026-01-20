@@ -1,121 +1,76 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
+import unicodedata
 
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
-from sklearn.ensemble import RandomForestClassifier
+def norm(txt: str) -> str:
+    """Remove acentos, deixa minusculo e normaliza espaços."""
+    if not txt:
+        return ""
+    txt = txt.strip().lower()
+    txt = unicodedata.normalize("NFKD", txt)
+    txt = "".join([c for c in txt if not unicodedata.combining(c)])
+    return " ".join(txt.split())
 
-st.set_page_config(page_title="Triagem PC Brasília (Demo IA)", layout="centered")
+# Base (didática) - você pode crescer isso à vontade
+KB = [
+    {
+        "tags": ["preservacao de local", "isolamento", "vestigios", "local de crime"],
+        "texto": (
+            "Em ocorrências graves, priorize a preservação do local: "
+            "evite contaminação de vestígios, controle acesso e registre informações essenciais "
+            "conforme protocolos institucionais (base didática)."
+        ),
+    },
+    {
+        "tags": ["violencia domestica", "vd", "maria da penha", "agressao domestica"],
+        "texto": (
+            "Violência doméstica (base didática): priorize a segurança da vítima; avalie risco imediato; "
+            "oriente a preservação de evidências (mensagens, áudios, fotos, laudos); "
+            "registre circunstâncias com clareza e oriente sobre medidas protetivas e canais formais, "
+            "conforme protocolos vigentes."
+        ),
+    },
+    {
+        "tags": ["homicidio", "tentativa de homicidio", "lesao grave", "risco a vida"],
+        "texto": (
+            "Homicídio / tentativa (base didática): trate como alta criticidade. "
+            "Atenção ao acionamento de equipes competentes, preservação do local e registro de informações "
+            "sobre vítimas, testemunhas e dinâmica inicial, conforme protocolos institucionais."
+        ),
+    },
+    {
+        "tags": ["estelionato", "golpe", "fraude", "pix", "cartao"],
+        "texto": (
+            "Estelionato (base didática): coletar evidências digitais (comprovantes, prints, links, contas, conversas); "
+            "orientar preservação de registros e canais formais para bloqueio/contestação quando aplicável; "
+            "registrar a narrativa com datas, valores e identificadores."
+        ),
+    },
+    {
+        "tags": ["ameaca", "intimidacao", "coacao"],
+        "texto": (
+            "Ameaça (base didática): registrar circunstâncias, identificar meio (presencial/mensagem), "
+            "avaliar risco e orientar preservação de evidências (mensagens, áudios, prints)."
+        ),
+    },
+]
 
-st.title("Triagem Inteligente – PC Brasília (Demo)")
-st.caption("Modelo didático com dados sintéticos (aula).")
+def recuperar_rag(pergunta: str) -> str:
+    q = norm(pergunta)
 
-# ========= 1) Dataset sintético + treino do modelo =========
-@st.cache_resource
-def treinar_modelo():
-    np.random.seed(42)
+    # Pontuação simples: conta quantas tags bateram
+    melhor = None
+    melhor_score = 0
 
-    tipos = ["Furto", "Roubo", "Ameaça", "Violência Doméstica", "Estelionato", "Tráfico", "Homicídio (tentativa)"]
-    locais = ["Asa Norte", "Asa Sul", "Ceilândia", "Taguatinga", "Samambaia", "Planaltina", "Sobradinho"]
-    periodos = ["Madrugada", "Manhã", "Tarde", "Noite"]
-
-    def definir_prioridade(row):
+    for item in KB:
         score = 0
-        if row["tipo"] in ["Homicídio (tentativa)", "Tráfico", "Violência Doméstica", "Roubo"]:
-            score += 2
-        if row["tem_arma"] == 1:
-            score += 2
-        if row["vitima_ferida"] == 1:
-            score += 2
-        if row["historico_reincidencia"] == 1:
-            score += 1
-        if score >= 5:
-            return "Alta"
-        elif score >= 3:
-            return "Média"
-        else:
-            return "Baixa"
+        for tag in item["tags"]:
+            if norm(tag) in q:
+                score += 1
+        if score > melhor_score:
+            melhor_score = score
+            melhor = item["texto"]
 
-    n = 220
-    df = pd.DataFrame({
-        "tipo": np.random.choice(tipos, n),
-        "local": np.random.choice(locais, n),
-        "periodo": np.random.choice(periodos, n),
-        "tem_arma": np.random.choice([0,1], n, p=[0.86, 0.14]),
-        "vitima_ferida": np.random.choice([0,1], n, p=[0.76, 0.24]),
-        "historico_reincidencia": np.random.choice([0,1], n, p=[0.72, 0.28])
-    })
-    df["prioridade"] = df.apply(definir_prioridade, axis=1)
+    if melhor_score == 0:
+        return "Não consta na base um procedimento específico para esse tema (base didática)."
 
-    X = df[["tipo","local","periodo","tem_arma","vitima_ferida","historico_reincidencia"]]
-    y = df["prioridade"]
+    return melhor
 
-    cat_cols = ["tipo","local","periodo"]
-    num_cols = ["tem_arma","vitima_ferida","historico_reincidencia"]
-
-    preprocess = ColumnTransformer([
-        ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols),
-        ("num", "passthrough", num_cols)
-    ])
-
-    model = RandomForestClassifier(n_estimators=250, random_state=42)
-
-    pipe = Pipeline([("prep", preprocess), ("model", model)])
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
-    pipe.fit(X_train, y_train)
-
-    return pipe, tipos, locais, periodos
-
-pipe, tipos, locais, periodos = treinar_modelo()
-
-# ========= 2) Inputs do usuário =========
-st.subheader("1) Informe os dados da ocorrência")
-
-col1, col2 = st.columns(2)
-with col1:
-    tipo = st.selectbox("Tipo", tipos)
-    local = st.selectbox("Local", locais)
-    periodo = st.selectbox("Período", periodos)
-
-with col2:
-    tem_arma = st.selectbox("Tem arma?", [0,1], format_func=lambda x: "Não" if x==0 else "Sim")
-    vitima_ferida = st.selectbox("Vítima ferida?", [0,1], format_func=lambda x: "Não" if x==0 else "Sim")
-    reinc = st.selectbox("Reincidência?", [0,1], format_func=lambda x: "Não" if x==0 else "Sim")
-
-if st.button("Classificar prioridade"):
-    nova = pd.DataFrame([{
-        "tipo": tipo,
-        "local": local,
-        "periodo": periodo,
-        "tem_arma": tem_arma,
-        "vitima_ferida": vitima_ferida,
-        "historico_reincidencia": reinc
-    }])
-    prioridade = pipe.predict(nova)[0]
-    st.success(f"Prioridade prevista: **{prioridade}**")
-
-# ========= 3) Mini-RAG =========
-st.subheader("2) Assistente (Mini-RAG)")
-
-kb = {
-    "preservação de local": "Em ocorrências graves, orientar preservação do local, evitar contaminação de vestígios e acionar equipe competente conforme protocolos.",
-    "violência doméstica": "Priorizar segurança da vítima, avaliar risco imediato, orientar registro e medidas protetivas conforme protocolos vigentes.",
-    "estelionato": "Coletar evidências digitais (comprovantes, prints, contas), orientar preservação de registros e canais formais para bloqueio/contestação quando aplicável.",
-    "ameaça": "Registrar circunstâncias, identificar meio (presencial/mensagem), avaliar risco e orientar preservação de evidências (mensagens, áudios)."
-}
-
-q = st.text_input("Pergunta (ex.: Como tratar um caso de Ameaça?)")
-if q:
-    ql = q.lower()
-    contexto = None
-    for tema, texto in kb.items():
-        if tema in ql:
-            contexto = texto
-            break
-    if not contexto:
-        contexto = "Não consta na base um procedimento específico para esse tema (base didática)."
-    st.info(contexto)
