@@ -1,76 +1,86 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
 import unicodedata
 
-def norm(txt: str) -> str:
-    """Remove acentos, deixa minusculo e normaliza espaços."""
-    if not txt:
-        return ""
-    txt = txt.strip().lower()
-    txt = unicodedata.normalize("NFKD", txt)
-    txt = "".join([c for c in txt if not unicodedata.combining(c)])
-    return " ".join(txt.split())
+st.set_page_config(page_title="Triagem Inteligente - PC Brasília", layout="centered")
 
-# Base (didática) - você pode crescer isso à vontade
+st.title("Triagem Inteligente – PC Brasília (Demo)")
+st.caption("Modelo didático com Machine Learning + Mini-RAG")
+
+# =========================
+# 1) MODELO DE MACHINE LEARNING
+# =========================
+
+@st.cache_data
+def treinar_modelo():
+    data = [
+        ["Violência Doméstica","Taguatinga","Madrugada","Sim","Sim","Sim","Alta"],
+        ["Furto","Plano Piloto","Tarde","Não","Não","Não","Baixa"],
+        ["Ameaça","Ceilândia","Noite","Sim","Não","Sim","Média"],
+        ["Homicídio","Samambaia","Noite","Sim","Sim","Não","Alta"],
+        ["Estelionato","Asa Norte","Manhã","Não","Não","Sim","Média"],
+    ]
+    cols = ["tipo","local","periodo","tem_arma","vitima_ferida","reincidencia","prioridade"]
+    df = pd.DataFrame(data, columns=cols)
+
+    X = df.drop("prioridade", axis=1)
+    y = df["prioridade"]
+
+    cat_cols = X.columns
+    pre = ColumnTransformer([("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols)])
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    pipe = Pipeline([("pre", pre), ("model", model)])
+    pipe.fit(X, y)
+    return pipe
+
+pipe = treinar_modelo()
+
+st.header("1) Classificação da Ocorrência")
+
+tipo = st.selectbox("Tipo", ["Violência Doméstica","Furto","Ameaça","Homicídio","Estelionato"])
+local = st.selectbox("Local", ["Plano Piloto","Taguatinga","Ceilândia","Samambaia","Asa Norte"])
+periodo = st.selectbox("Período", ["Manhã","Tarde","Noite","Madrugada"])
+tem_arma = st.selectbox("Tem arma?", ["Sim","Não"])
+vitima_ferida = st.selectbox("Vítima ferida?", ["Sim","Não"])
+reinc = st.selectbox("Reincidência?", ["Sim","Não"])
+
+if st.button("Classificar prioridade"):
+    nova = pd.DataFrame([{
+        "tipo":tipo,"local":local,"periodo":periodo,
+        "tem_arma":tem_arma,"vitima_ferida":vitima_ferida,"reincidencia":reinc
+    }])
+    p = pipe.predict(nova)[0]
+    st.success(f"Prioridade prevista: **{p}**")
+
+# =========================
+# 2) MINI-RAG (BASE DE CONHECIMENTO)
+# =========================
+
+def norm(t):
+    return "".join(c for c in unicodedata.normalize("NFD", t.lower()) if unicodedata.category(c) != "Mn")
+
 KB = [
-    {
-        "tags": ["preservacao de local", "isolamento", "vestigios", "local de crime"],
-        "texto": (
-            "Em ocorrências graves, priorize a preservação do local: "
-            "evite contaminação de vestígios, controle acesso e registre informações essenciais "
-            "conforme protocolos institucionais (base didática)."
-        ),
-    },
-    {
-        "tags": ["violencia domestica", "vd", "maria da penha", "agressao domestica"],
-        "texto": (
-            "Violência doméstica (base didática): priorize a segurança da vítima; avalie risco imediato; "
-            "oriente a preservação de evidências (mensagens, áudios, fotos, laudos); "
-            "registre circunstâncias com clareza e oriente sobre medidas protetivas e canais formais, "
-            "conforme protocolos vigentes."
-        ),
-    },
-    {
-        "tags": ["homicidio", "tentativa de homicidio", "lesao grave", "risco a vida"],
-        "texto": (
-            "Homicídio / tentativa (base didática): trate como alta criticidade. "
-            "Atenção ao acionamento de equipes competentes, preservação do local e registro de informações "
-            "sobre vítimas, testemunhas e dinâmica inicial, conforme protocolos institucionais."
-        ),
-    },
-    {
-        "tags": ["estelionato", "golpe", "fraude", "pix", "cartao"],
-        "texto": (
-            "Estelionato (base didática): coletar evidências digitais (comprovantes, prints, links, contas, conversas); "
-            "orientar preservação de registros e canais formais para bloqueio/contestação quando aplicável; "
-            "registrar a narrativa com datas, valores e identificadores."
-        ),
-    },
-    {
-        "tags": ["ameaca", "intimidacao", "coacao"],
-        "texto": (
-            "Ameaça (base didática): registrar circunstâncias, identificar meio (presencial/mensagem), "
-            "avaliar risco e orientar preservação de evidências (mensagens, áudios, prints)."
-        ),
-    },
+    {"tema":"violencia domestica","texto":"Priorizar segurança da vítima, aplicar Lei Maria da Penha, registrar ocorrência, avaliar medidas protetivas, preservar evidências e acionar rede de apoio."},
+    {"tema":"homicidio","texto":"Isolar local do crime, preservar vestígios, acionar perícia, identificar testemunhas, registrar BO e comunicar autoridade policial competente."},
+    {"tema":"ameaca","texto":"Registrar circunstâncias, identificar meio (presencial/mensagem), avaliar risco, orientar preservação de mensagens e áudios."},
+    {"tema":"furto","texto":"Registrar ocorrência, coletar informações do bem, imagens de câmeras, orientar bloqueio de dispositivos e rastreamento."},
+    {"tema":"estelionato","texto":"Coletar evidências digitais, orientar bloqueio bancário, registrar BO, preservar prints e logs."},
 ]
 
-def recuperar_rag(pergunta: str) -> str:
+def recuperar_rag(pergunta):
     q = norm(pergunta)
-
-    # Pontuação simples: conta quantas tags bateram
-    melhor = None
-    melhor_score = 0
-
     for item in KB:
-        score = 0
-        for tag in item["tags"]:
-            if norm(tag) in q:
-                score += 1
-        if score > melhor_score:
-            melhor_score = score
-            melhor = item["texto"]
+        if item["tema"] in q:
+            return item["texto"]
+    return "Não consta procedimento específico na base didática."
 
-    if melhor_score == 0:
-        return "Não consta na base um procedimento específico para esse tema (base didática)."
+st.header("2) Assistente (Mini-RAG)")
 
-    return melhor
-
+q = st.text_input("Pergunta (ex: Como tratar um caso de Violência Doméstica?)")
+if q:
+    st.info(recuperar_rag(q))
